@@ -21,21 +21,23 @@ fi
 
 ### Copy the logs from the Hadoop cluster back for post-mortem
 echo "Copying Hadoop logs back to $HADOOP_CONF_DIR/logs..."
-cp -Lvr ${config_subs[HADOOP_LOG_DIR]} $HADOOP_CONF_DIR/logs
+cp -Lvr $(getConfigSubValue HADOOP_LOG_DIR) $HADOOP_CONF_DIR/logs
 
 ### Clean up all the garbage from the Hadoop job
 for node in $(cat $HADOOP_CONF_DIR/slaves $HADOOP_CONF_DIR/masters | sort -u | head -n $NODES)
 do
     rmdirs=""
     rmlinks=""
-    for key in "${!config_subs[@]}"; do
+    for entry in "${config_subs[@]}"; do
+        key=${entry%%:*}
+        value=${entry#*:}
         if [[ $key =~ _DIR$ ]]; then
             ### If a dir is a symlink, that means it's pointing to a persistent
             ### state that should NOT be deleted.
-            if [ -h ${config_subs[$key]} ]; then
-                rmlinks="${config_subs[$key]} $rmlinks"
+            if [ -h ${value} ]; then
+                rmlinks="${value} $rmlinks"
             else
-                rmdirs="${config_subs[$key]} $rmdirs"
+                rmdirs="${value} $rmdirs"
             fi
         fi
     done

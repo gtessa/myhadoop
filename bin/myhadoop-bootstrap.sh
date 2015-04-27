@@ -34,7 +34,7 @@ fi
 if [ "z$PBS_JOBID" != "z" ]; then
     MH_WORKDIR=$PBS_O_WORKDIR
     MH_JOBID=$PBS_JOBID
-elif [ "z$PE_NODEFILE" != "z" ]; then
+elif [ "z$PE_HOSTFILE" != "z" ]; then
     MH_WORKDIR=$SGE_O_WORKDIR
     MH_JOBID=$JOB_ID
 elif [ "z$SLURM_JOBID" != "z" ]; then

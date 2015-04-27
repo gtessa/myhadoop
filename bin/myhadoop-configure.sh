@@ -59,7 +59,7 @@ function print_nodelist {
     if [ "z$RESOURCE_MGR" == "zpbs" ]; then
         cat $PBS_NODEFILE | sed -e "$MH_IPOIB_TRANSFORM"
     elif [ "z$RESOURCE_MGR" == "zsge" ]; then
-        cat $PE_NODEFILE | sed -e "$MH_IPOIB_TRANSFORM"
+        cat $PE_HOSTFILE | cut -d' ' -f 1 | sed -e "$MH_IPOIB_TRANSFORM"
     elif [ "z$RESOURCE_MGR" == "zslurm" ]; then
         scontrol show hostname $SLURM_NODELIST | sed -e "$MH_IPOIB_TRANSFORM"
     fi
@@ -86,7 +86,7 @@ fi
 ### Detect our resource manager and populate necessary environment variables
 if [ "z$PBS_JOBID" != "z" ]; then
     RESOURCE_MGR="pbs"
-elif [ "z$PE_NODEFILE" != "z" ]; then
+elif [ "z$PE_HOSTFILE" != "z" ]; then
     RESOURCE_MGR="sge"
 elif [ "z$SLURM_JOBID" != "z" ]; then
     RESOURCE_MGR="slurm"
@@ -221,30 +221,44 @@ cat $HADOOP_CONF_DIR/slaves
 ### any new directories you define get properly deleted at the end of the job!
 cat <<EOF > $HADOOP_CONF_DIR/myhadoop.conf
 NODES=$NODES
-declare -A config_subs
-config_subs[MASTER_NODE]="$MASTER_NODE"
-config_subs[MAPRED_LOCAL_DIR]="$MH_SCRATCH_DIR/mapred_scratch"
-config_subs[HADOOP_TMP_DIR]="$MH_SCRATCH_DIR/tmp"
-config_subs[DFS_NAME_DIR]="$MH_SCRATCH_DIR/namenode_data"
-config_subs[DFS_DATA_DIR]="$MH_SCRATCH_DIR/hdfs_data"
-config_subs[DFS_REPLICATION]="$MH_DFS_REPLICATION"
-config_subs[DFS_BLOCK_SIZE]="$MH_DFS_BLOCK_SIZE"
-config_subs[MAPRED_TASKTRACKER_MAP_TASKS_MAXIMUM]="$MH_MAP_TASKS_MAXIMUM"
-config_subs[MAPRED_TASKTRACKER_REDUCE_TASKS_MAXIMUM]="$MH_REDUCE_TASKS_MAXIMUM"
-config_subs[MAPRED_MAP_TASKS]="$MH_MAP_TASKS"
-config_subs[MAPRED_REDUCE_TASKS]="$MH_REDUCE_TASKS"
-config_subs[HADOOP_LOG_DIR]="$MH_SCRATCH_DIR/logs"
-config_subs[HADOOP_PID_DIR]="$MH_SCRATCH_DIR/pids"
+config_subs=( 
+     "MASTER_NODE:$MASTER_NODE" 
+     "MAPRED_LOCAL_DIR:$MH_SCRATCH_DIR/mapred_scratch" 
+     "HADOOP_TMP_DIR:$MH_SCRATCH_DIR/tmp"
+     "DFS_NAME_DIR:$MH_SCRATCH_DIR/namenode_data"
+     "DFS_DATA_DIR:$MH_SCRATCH_DIR/hdfs_data"
+     "DFS_REPLICATION:$MH_DFS_REPLICATION"
+     "DFS_BLOCK_SIZE:$MH_DFS_BLOCK_SIZE"
+     "MAPRED_TASKTRACKER_MAP_TASKS_MAXIMUM:$MH_MAP_TASKS_MAXIMUM"
+     "MAPRED_TASKTRACKER_REDUCE_TASKS_MAXIMUM:$MH_REDUCE_TASKS_MAXIMUM"
+     "MAPRED_MAP_TASKS:$MH_MAP_TASKS"
+     "MAPRED_REDUCE_TASKS:$MH_REDUCE_TASKS"
+     "HADOOP_LOG_DIR:$MH_SCRATCH_DIR/logs"
+     "HADOOP_PID_DIR:$MH_SCRATCH_DIR/pids" )
+
+getConfigSubValue() {
+  for pair in "\${config_subs[@]}"; do
+    key=\${pair%%:*}
+    value=\${pair#*:}
+    if [ "\$key" = "\$1" ]; then
+      echo \$value
+    fi
+  done
+}
+
 EOF
 
 source $HADOOP_CONF_DIR/myhadoop.conf
 
 ### And actually apply those substitutions:
-for key in "${!config_subs[@]}"; do
+for pair in "${config_subs[@]}"; do
+  key=${pair%%:*}
+  value=${pair#*:}
+  
   for xml in mapred-site.xml core-site.xml hdfs-site.xml yarn-site.xml
   do
     if [ -f $HADOOP_CONF_DIR/$xml ]; then
-      sed -i 's#'$key'#'${config_subs[$key]}'#g' $HADOOP_CONF_DIR/$xml
+      sed -i 's#'$key'#'${value}'#g' $HADOOP_CONF_DIR/$xml
     fi
   done
 done
@@ -253,11 +267,11 @@ done
 cat << EOF >> $HADOOP_CONF_DIR/hadoop-env.sh
 
 # myHadoop alterations for this job:
-export HADOOP_LOG_DIR=${config_subs[HADOOP_LOG_DIR]}
-export HADOOP_PID_DIR=${config_subs[HADOOP_PID_DIR]}
-export YARN_LOG_DIR=${config_subs[HADOOP_LOG_DIR]} # no effect if using Hadoop 1
-export YARN_PID_DIR=${config_subs[HADOOP_PID_DIR]} # no effect if using Hadoop 1
-export HADOOP_SECURE_DN_PID_DIR=${config_subs[HADOOP_PID_DIR]}
+export HADOOP_LOG_DIR=$(getConfigSubValue HADOOP_LOG_DIR)
+export HADOOP_PID_DIR=$(getConfigSubValue HADOOP_PID_DIR)
+export YARN_LOG_DIR=$(getConfigSubValue HADOOP_LOG_DIR) # no effect if using Hadoop 1
+export YARN_PID_DIR=$(getConfigSubValue HADOOP_PID_DIR) # no effect if using Hadoop 1
+export HADOOP_SECURE_DN_PID_DIR=$(getConfigSubValue HADOOP_PID_DIR)
 export HADOOP_HOME_WARN_SUPPRESS=TRUE
 export JAVA_HOME=$JAVA_HOME
 ### Jetty leaves garbage in /tmp no matter what \$TMPDIR is; this is an extreme 
@@ -273,17 +287,19 @@ if [ "z$MH_PERSIST_DIR" != "z" ]; then
     for node in $(cat $HADOOP_CONF_DIR/slaves $HADOOP_CONF_DIR/masters | sort -u | head -n $NODES)
     do
         mkdir -p $MH_PERSIST_DIR/$i
-        echo "Linking $MH_PERSIST_DIR/$i to ${config_subs[DFS_DATA_DIR]} on $node"
-        ssh $node "mkdir -p $(dirname ${config_subs[DFS_DATA_DIR]}); ln -s $MH_PERSIST_DIR/$i ${config_subs[DFS_DATA_DIR]}"
+        echo "Linking $MH_PERSIST_DIR/$i to $(getConfigSubValue DFS_DATA_DIR) on $node"
+        ssh $node "mkdir -p $(dirname $(getConfigSubValue DFS_DATA_DIR)); ln -s 
+$MH_PERSIST_DIR/$i $(getConfigSubValue DFS_DATA_DIR)"
         let i++
     done
 
     ### Also link namenode data directory so we don't lose metadata on shutdown
-    namedir=$(basename ${config_subs[DFS_NAME_DIR]})
+    namedir=$(basename $(getConfigSubValue DFS_NAME_DIR))
     mkdir -p $MH_PERSIST_DIR/$namedir
     for node in $(cat $HADOOP_CONF_DIR/masters | sort -u )
     do
-        ssh $node "mkdir -p $(dirname ${config_subs[DFS_NAME_DIR]}); ln -s $MH_PERSIST_DIR/$namedir ${config_subs[DFS_NAME_DIR]}"
+        ssh $node "mkdir -p $(dirname $(getConfigSubValue DFS_NAME_DIR)); ln -s 
+$MH_PERSIST_DIR/$namedir $(getConfigSubValue DFS_NAME_DIR)"
     done
 fi
 
